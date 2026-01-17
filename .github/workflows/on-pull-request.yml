@@ -1,4 +1,4 @@
-name: PHPCS check
+name: Code Quality & Tests
 on:
   pull_request
 
@@ -7,8 +7,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  phpcs:
-    name: PHPCS check
+  build:
+    name: Code Quality & Tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -31,3 +31,6 @@ jobs:
         
       - name: Show PHPCS results in PR
         run: cs2pr ./phpcs-report.xml
+
+      - name: Run Tests
+        run: composer test
