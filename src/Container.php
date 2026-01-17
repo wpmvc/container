@@ -1,17 +1,20 @@
 <?php
 
-namespace WpMVC;
+namespace WpMVC\Container;
 
 defined( 'ABSPATH' ) || exit;
 
 use ReflectionClass;
 use ReflectionNamedType;
+use Psr\Container\ContainerInterface;
+use WpMVC\Container\Exception\ContainerException;
+use WpMVC\Container\Exception\NotFoundException;
 
 /**
  * Lightweight Dependency Injection Container
  * Provides auto-registration and singleton behavior on get()
  */
-class Container
+class Container implements ContainerInterface
 {
     /**
      * @var array
@@ -25,6 +28,8 @@ class Container
      * @param string $id
      * @param array $params
      * @return mixed
+     * @throws NotFoundException
+     * @throws ContainerException
      * @throws \ReflectionException
      */
     public function get( string $id, array $params = [] ) {
@@ -49,15 +54,17 @@ class Container
      * @param string $id
      * @param array $params
      * @return mixed
+     * @throws NotFoundException
+     * @throws ContainerException
      * @throws \Exception
      */
     protected function resolve( string $id, array $params = [] ) {
         if ( ! class_exists( $id ) ) {
-            throw new \Exception( "Service not found: {$id}" );
+            throw new NotFoundException( "Service not found: {$id}" );
         }
 
         if ( isset( $this->resolving[$id] ) ) {
-            throw new \Exception( "Circular dependency detected while resolving: {$id}" );
+            throw new ContainerException( "Circular dependency detected while resolving: {$id}" );
         }
 
         $this->resolving[$id] = true;
@@ -66,7 +73,7 @@ class Container
             $ref = new ReflectionClass( $id );
 
             if ( ! $ref->isInstantiable() ) {
-                throw new \Exception( "Class is not instantiable: {$id}" );
+                throw new ContainerException( "Class is not instantiable: {$id}" );
             }
 
             $constructor = $ref->getConstructor();
@@ -110,6 +117,8 @@ class Container
      * @param string $abstract
      * @param array $parameters
      * @return mixed
+     * @throws ContainerException
+     * @throws NotFoundException
      * @throws \Exception
      */
     public function make( string $abstract, array $parameters = [] ) {
