@@ -18,7 +18,9 @@
     "scripts": {
         "format": "vendor/bin/phpcbf --standard=phpcs.xml",
         "phpcs": "vendor/bin/phpcs --standard=phpcs.xml --report-full --report-checkstyle=./phpcs-report.xml",
-        "test": "./vendor/bin/phpunit"
+        "test": "vendor/bin/phpunit",
+        "test:multisite": "vendor/bin/phpunit -c phpunit-multisite.xml",
+        "test:setup": "bash bin/install-wp-tests.sh wpmvc_test root '' 127.0.0.1 latest true"
     },
     "require": {
         "php": ">=7.4",
@@ -30,7 +32,14 @@
         "dealerdirect/phpcodesniffer-composer-installer": "1.0.0",
         "phpcompatibility/phpcompatibility-wp": "2.1.4",
         "wp-coding-standards/wpcs": "^2.3",
-        "phpunit/phpunit": "9.6.x-dev"
+        "phpunit/phpunit": "^9.6",
+        "mockery/mockery": "^1.6",
+        "yoast/phpunit-polyfills": "^2.0"
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "WpMVC\\Container\\Tests\\": "tests/"
+        }
     },
     "config": {
         "allow-plugins": {

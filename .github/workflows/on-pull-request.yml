@@ -1,4 +1,4 @@
-name: Code Quality & Tests
+name: PHPCS & PHPUnit check
 on:
   pull_request
 
@@ -7,8 +7,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: Code Quality & Tests
+  phpcs:
+    name: PHPCS check
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -32,5 +32,45 @@ jobs:
       - name: Show PHPCS results in PR
         run: cs2pr ./phpcs-report.xml
 
-      - name: Run Tests
+  phpunit:
+    name: PHPUnit tests
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: yes
+          MYSQL_DATABASE: wpmvc_test
+        ports:
+          - 3306:3306
+        options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup PHP
+        uses: "shivammathur/setup-php@v2"
+        with:
+          php-version: "7.4"
+          extensions: mysql
+          coverage: none
+
+      - name: Install SVN
+        run: sudo apt-get update && sudo apt-get install -y subversion
+
+      - name: Install Composer dependencies
+        uses: "ramsey/composer-install@v2"
+
+      - name: Setup WordPress tests
+        run: composer test:setup
+        env:
+          WP_VERSION: latest
+
+      - name: Run PHPUnit tests
         run: composer test
+
+      - name: Publish Test Report
+        uses: mikepenz/action-junit-report@v3
+        if: always()
+        with:
+          report_paths: '**/phpunit-report.xml'
