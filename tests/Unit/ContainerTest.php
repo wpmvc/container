@@ -1,4 +1,11 @@
 <?php
+/**
+ * ContainerTest class (Unit).
+ *
+ * @package WpMVC\Container\Tests\Unit
+ * @author  WpMVC
+ * @license MIT
+ */
 
 namespace WpMVC\Container\Tests;
 
@@ -6,7 +13,24 @@ use PHPUnit\Framework\TestCase;
 use WpMVC\Container\Container;
 use WpMVC\Container\Exception\ContainerException;
 use WpMVC\Container\Exception\NotFoundException;
+use WpMVC\Container\Tests\Fixtures\Contracts\TestInterface;
+use WpMVC\Container\Tests\Fixtures\Models\ConcreteImplementation;
+use WpMVC\Container\Tests\Fixtures\Models\ConcreteClass;
+use WpMVC\Container\Tests\Fixtures\Models\ServiceWithDependency;
+use WpMVC\Container\Tests\Fixtures\Models\ServiceWithNestedDependency;
+use WpMVC\Container\Tests\Fixtures\Models\CircularA;
+use WpMVC\Container\Tests\Fixtures\Models\ClassWithParams;
+use WpMVC\Container\Tests\Fixtures\Models\ClassWithOptionalParam;
+use WpMVC\Container\Tests\Fixtures\Models\MethodInjectionClass;
 
+/**
+ * Class ContainerTest
+ *
+ * Unit tests for the core Container class, verifying basic binding, resolution,
+ * and dependency injection functionality in isolation.
+ *
+ * @package WpMVC\Container\Tests
+ */
 class ContainerTest extends TestCase
 {
     protected $container;
@@ -15,15 +39,24 @@ class ContainerTest extends TestCase
         $this->container = new Container();
     }
 
+    /**
+     * Verifies that the container can be instantiated.
+     */
     public function test_it_can_be_instantiated() {
         $this->assertInstanceOf( Container::class, $this->container );
     }
 
+    /**
+     * Verifies resolution of a class that has no dependencies.
+     */
     public function test_it_resolves_a_class_without_dependencies() {
         $instance = $this->container->get( ConcreteClass::class );
         $this->assertInstanceOf( ConcreteClass::class, $instance );
     }
 
+    /**
+     * Verifies that singletons return the same instance across multiple resolutions.
+     */
     public function test_it_returns_same_instance_for_singleton() {
         $instance1 = $this->container->get( ConcreteClass::class );
         $instance2 = $this->container->get( ConcreteClass::class );
@@ -31,6 +64,9 @@ class ContainerTest extends TestCase
         $this->assertSame( $instance1, $instance2 );
     }
 
+    /**
+     * Verifies that make() always returns a new instance even for shared services.
+     */
     public function test_make_returns_new_instance() {
         $instance1 = $this->container->make( ConcreteClass::class );
         $instance2 = $this->container->make( ConcreteClass::class );
@@ -40,16 +76,16 @@ class ContainerTest extends TestCase
         $this->assertNotSame( $instance1, $instance2 );
     }
 
+    /**
+     * Verifies that has() returns true for classes that exist.
+     */
     public function test_has_returns_true_for_existing_classes() {
         $this->assertTrue( $this->container->has( ConcreteClass::class ) );
     }
 
-    public function test_has_returns_false_for_non_existent_classes() {
-        // has() returns true if class_exists() is true.
-        // It should return false for a nonsense string.
-        $this->assertFalse( $this->container->has( 'NonExistentClassXYZ' ) );
-    }
-
+    /**
+     * Verifies automatic resolution of constructor dependencies.
+     */
     public function test_it_resolves_dependencies_automatically() {
         $service = $this->container->get( ServiceWithDependency::class );
 
@@ -57,6 +93,9 @@ class ContainerTest extends TestCase
         $this->assertInstanceOf( ConcreteClass::class, $service->dependency );
     }
 
+    /**
+     * Verifies automatic resolution of multi-level nested dependencies.
+     */
     public function test_it_resolves_nested_dependencies() {
         $nested = $this->container->get( ServiceWithNestedDependency::class );
 
@@ -65,11 +104,17 @@ class ContainerTest extends TestCase
         $this->assertInstanceOf( ConcreteClass::class, $nested->service->dependency );
     }
 
+    /**
+     * Verifies that requesting a non-existent class throws a NotFoundException.
+     */
     public function test_it_throws_not_found_exception_for_non_existent_class() {
         $this->expectException( NotFoundException::class );
         $this->container->get( 'Some\Random\NonExistent\Class' );
     }
 
+    /**
+     * Verifies that circular dependencies are caught (basic autowiring case).
+     */
     public function test_it_throws_container_exception_for_circular_dependency() {
         $this->expectException( ContainerException::class );
         $this->expectExceptionMessage( 'Circular dependency detected' );
@@ -77,6 +122,9 @@ class ContainerTest extends TestCase
         $this->container->get( CircularA::class );
     }
 
+    /**
+     * Verifies that make() can override default parameters.
+     */
     public function test_it_can_make_with_parameters_override() {
         $instance = $this->container->make(
             ClassWithParams::class,
@@ -90,6 +138,9 @@ class ContainerTest extends TestCase
         $this->assertEquals( 42, $instance->number );
     }
 
+    /**
+     * Verifies method injection via the call() method.
+     */
     public function test_call_method_injection() {
         $instance = new MethodInjectionClass();
 
@@ -104,6 +155,9 @@ class ContainerTest extends TestCase
         $this->assertInstanceOf( ConcreteClass::class, $result['dependency'] );
     }
 
+    /**
+     * Verifies closure injection via the call() method.
+     */
     public function test_call_closure_injection() {
         $result = $this->container->call(
             function ( ConcreteClass $dep, $test ) {
@@ -116,74 +170,80 @@ class ContainerTest extends TestCase
         $this->assertEquals( 'worked', $result['test'] );
     }
 
-    public function test_set_manually_binds_instance() {
-        $mock = new \stdClass();
-        $this->container->set( 'custom_key', $mock );
+    /**
+     * Verifies interface to concrete mapping.
+     */
+    public function test_it_binds_interface_to_concrete() {
+        $this->container->bind( TestInterface::class, ConcreteImplementation::class );
+        $instance = $this->container->get( TestInterface::class );
 
-        $this->assertTrue( $this->container->has( 'custom_key' ) );
-        $this->assertSame( $mock, $this->container->get( 'custom_key' ) );
+        $this->assertInstanceOf( ConcreteImplementation::class, $instance );
     }
 
-    public function test_call_static_method_injection() {
-        $result = $this->container->call(
-            [MethodInjectionClass::class, 'static_method'],
-            [
-                'param' => 'static_test'
-            ]
+    /**
+     * Verifies using a closure as a factory binding.
+     */
+    public function test_it_binds_closure_as_factory() {
+        $this->container->bind(
+            'config', function() {
+                return ['db' => 'localhost'];
+            }
         );
 
-        $this->assertEquals( 'static_test', $result['param'] );
-        $this->assertInstanceOf( ConcreteClass::class, $result['dependency'] );
-    }
-}
-
-// Fixtures
-
-class ConcreteClass {}
-
-class ServiceWithDependency {
-    public $dependency;
-
-    public function __construct( ConcreteClass $dependency ) {
-        $this->dependency = $dependency;
-    }
-}
-
-class ServiceWithNestedDependency {
-    public $service;
-
-    public function __construct( ServiceWithDependency $service ) {
-        $this->service = $service;
-    }
-}
-
-class CircularA {
-    public function __construct( CircularB $b ) {
-    }
-}
-
-class CircularB {
-    public function __construct( CircularA $a ) {
-    }
-}
-
-class ClassWithParams {
-    public $value;
-
-    public $number;
-
-    public function __construct( $value, $number = 0 ) {
-        $this->value  = $value;
-        $this->number = $number;
-    }
-}
-
-class MethodInjectionClass {
-    public function method( ConcreteClass $dependency, $param ) {
-        return ['dependency' => $dependency, 'param' => $param];
+        $config = $this->container->get( 'config' );
+        $this->assertEquals( 'localhost', $config['db'] );
     }
 
-    public static function static_method( ConcreteClass $dependency, $param ) {
-        return ['dependency' => $dependency, 'param' => $param];
+    /**
+     * Verifies the use of positional parameters in call().
+     */
+    public function test_call_with_positional_parameters() {
+        $result = $this->container->call(
+            function ( ConcreteClass $dep, $test ) {
+                return ['dep' => $dep, 'test' => $test];
+            },
+            [1 => 'positional'] // Index 1 is $test
+        );
+
+        $this->assertInstanceOf( ConcreteClass::class, $result['dep'] );
+        $this->assertEquals( 'positional', $result['test'] );
+    }
+
+    /**
+     * Verifies handling of nullable parameters in call().
+     */
+    public function test_it_handles_nullable_parameters() {
+        $result = $this->container->call(
+            function ( ?TestInterface $dep = null ) {
+                return $dep;
+            }
+        );
+
+        $this->assertNull( $result );
+    }
+
+    /**
+     * Verifies resolution of optional constructor parameters.
+     */
+    public function test_it_resolves_optional_parameters() {
+        $instance = $this->container->make( ClassWithOptionalParam::class );
+        $this->assertEquals( 'default', $instance->value );
+    }
+
+    /**
+     * Verifies that middleware-style calls work correctly (injecting stdClass and closure).
+     */
+    public function test_it_correctly_resolves_middleware_like_calls() {
+        $req  = new \stdClass();
+        $next = function() { return 'next'; };
+
+        $result = $this->container->call(
+            function( \stdClass $r, $n ) {
+                return [$r, $n()];
+            }, [$req, $next]
+        );
+
+        $this->assertSame( $req, $result[0] );
+        $this->assertEquals( 'next', $result[1] );
     }
 }

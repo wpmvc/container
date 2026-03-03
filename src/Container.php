@@ -1,202 +1,362 @@
 <?php
+/**
+ * Container class.
+ *
+ * @package WpMVC\Container
+ * @author  WpMVC
+ * @license MIT
+ */
 
 namespace WpMVC\Container;
 
 defined( 'ABSPATH' ) || exit;
 
-use ReflectionClass;
-use ReflectionNamedType;
+use Closure;
 use Psr\Container\ContainerInterface;
 use WpMVC\Container\Exception\ContainerException;
 use WpMVC\Container\Exception\NotFoundException;
+use WpMVC\Container\Exception\CircularDependencyException;
 
 /**
- * Lightweight Dependency Injection Container
- * Provides auto-registration and singleton behavior on get()
+ * Class Container
+ *
+ * Enterprise-Ready Dependency Injection Container for WordPress.
+ *
+ * @package WpMVC\Container
+ *
+ * @method $this bind(string $abstract, mixed|null $concrete = null)
+ * @method $this singleton(string $abstract, mixed|null $concrete = null)
+ * @method $this alias(string $abstract, string $alias)
+ * @method mixed get(string $id, array $params = [])
+ * @method mixed make(string $abstract, array $parameters = [])
+ * @method mixed call(callable|array|string $callback, array $parameters = [])
  */
 class Container implements ContainerInterface
 {
     /**
+     * Stored service instances (Singletons).
+     *
      * @var array
      */
     protected $instances = [];
 
     /**
-     * Get a service from the container.
-     * Auto-registers the service as a singleton if not already registered.
+     * Stack of IDs currently being resolved (Circular detection).
      *
-     * @param string $id
-     * @param array $params
-     * @return mixed
-     * @throws NotFoundException
-     * @throws ContainerException
-     * @throws \ReflectionException
-     */
-    public function get( string $id, array $params = [] ) {
-        if ( isset( $this->instances[$id] ) ) {
-            return $this->instances[$id];
-        }
-
-        $instance             = $this->resolve( $id, $params );
-        $this->instances[$id] = $instance;
-
-        return $instance;
-    }
-
-    /**
      * @var array
      */
     protected $resolving = [];
 
     /**
-     * Resolve a service instance (without storing as singleton).
+     * The service registry instance.
      *
-     * @param string $id
-     * @param array $params
-     * @return mixed
-     * @throws NotFoundException
-     * @throws ContainerException
-     * @throws \Exception
+     * @var Registry
      */
-    protected function resolve( string $id, array $params = [] ) {
-        if ( ! class_exists( $id ) ) {
-            throw new NotFoundException( "Service not found: {$id}" );
+    protected $registry;
+
+    /**
+     * The resolution engine instance.
+     *
+     * @var ResolutionEngine
+     */
+    protected $engine;
+
+    /**
+     * The callback invoker instance.
+     *
+     * @var CallbackInvoker
+     */
+    protected $invoker;
+
+    /**
+     * Container constructor.
+     */
+    public function __construct() {
+        $this->registry = new Registry();
+        $this->engine   = new ResolutionEngine( $this );
+        $this->invoker  = new CallbackInvoker( $this, $this->engine );
+    }
+
+    /**
+     * Register a transient binding.
+     *
+     * @param  string      $abstract
+     * @param  mixed|null  $concrete
+     * @return $this
+     */
+    public function bind( string $abstract, $concrete = null ): self {
+        $this->registry->bind( $abstract, $concrete );
+        return $this;
+    }
+
+    /**
+     * Register a shared (singleton) binding.
+     *
+     * @param  string      $abstract
+     * @param  mixed|null  $concrete
+     * @return $this
+     */
+    public function singleton( string $abstract, $concrete = null ): self {
+        $this->registry->singleton( $abstract, $concrete );
+        return $this;
+    }
+
+    /**
+     * Alias a type to another name.
+     *
+     * @param  string  $abstract
+     * @param  string  $alias
+     * @return $this
+     */
+    public function alias( string $abstract, string $alias ): self {
+        $this->registry->alias( $abstract, $alias );
+        return $this;
+    }
+
+    /**
+     * Assign a set of tags to a given binding.
+     *
+     * @param  array|string  $abstracts
+     * @param  array|mixed   $tags
+     * @return $this
+     */
+    public function tag( $abstracts, $tags ): self {
+        $this->registry->tag( (array) $abstracts, (array) $tags );
+        return $this;
+    }
+
+    /**
+     * Resolve all bindings for a given tag.
+     *
+     * @param  string  $tag
+     * @return iterable
+     */
+    public function tagged( string $tag ): iterable {
+        return array_map(
+            function ( $abstract ) {
+                return $this->get( $abstract );
+            }, $this->registry->get_tag( $tag )
+        );
+    }
+
+    /**
+     * Get a service from the container.
+     *
+     * @param  string  $id
+     * @param  array   $params
+     * @return mixed
+     * @throws NotFoundException            If the service cannot be resolved.
+     * @throws CircularDependencyException  If a circularity is detected.
+     * @throws ContainerException           If instantiation fails.
+     */
+    public function get( string $id, array $params = [] ) {
+        // 1. If it's already in instance cache, return it
+        if ( isset( $this->instances[$id] ) ) {
+            if ( ! empty( $params ) ) {
+                throw new ContainerException( "Cannot pass parameters to an already instantiated shared service: {$id}" );
+            }
+            return $this->instances[$id];
         }
 
+        // 2. Circular dependency detection
         if ( isset( $this->resolving[$id] ) ) {
-            throw new ContainerException( "Circular dependency detected while resolving: {$id}" );
+            throw new CircularDependencyException( "Circular dependency detected while resolving: {$id}" );
         }
 
         $this->resolving[$id] = true;
 
         try {
-            $ref = new ReflectionClass( $id );
+            // 3. Determine terminal ID and concrete
+            $resolved_id = $this->registry->resolve_id( $id );
+            $concrete    = $this->registry->get_concrete( $id );
+            
+            // If the key is not in registry, try to autowire it as a class
+            $is_shared = $this->registry->has( $id ) ? $this->registry->is_shared( $id ) : true;
 
-            if ( ! $ref->isInstantiable() ) {
-                throw new ContainerException( "Class is not instantiable: {$id}" );
+            // 4. Check if the resolved ID or concrete is already instantiated
+            $cached_key = null;
+            if ( isset( $this->instances[$resolved_id] ) ) {
+                $cached_key = $resolved_id;
+            } elseif ( is_string( $concrete ) && isset( $this->instances[$concrete] ) ) {
+                $cached_key = $concrete;
             }
 
-            $constructor = $ref->getConstructor();
-            $args        = [];
-
-            if ( $constructor ) {
-                $args = $this->resolve_dependencies( $constructor, $params );
+            if ( $is_shared && $cached_key !== null ) {
+                if ( ! empty( $params ) ) {
+                    throw new ContainerException( "Cannot pass parameters to an already instantiated shared service: {$cached_key}" );
+                }
+                $this->instances[$id] = $this->instances[$cached_key];
+                return $this->instances[$id];
             }
 
-            return $ref->newInstanceArgs( $args );
+            // 5. Build the instance
+            $instance = $this->build( $concrete, $params, $id );
+
+            // 6. Cache if shared
+            if ( $is_shared ) {
+                $this->instances[$id] = $instance;
+                
+                // Map the instance to the concrete class name too
+                if ( is_string( $concrete ) && $concrete !== $id ) {
+                    $this->instances[$concrete] = $instance;
+                }
+                
+                // Map it to the terminal resolved ID too
+                if ( $resolved_id !== $id && $resolved_id !== $concrete ) {
+                    $this->instances[$resolved_id] = $instance;
+                }
+            }
+
+            return $instance;
         } finally {
             unset( $this->resolving[$id] );
         }
     }
 
     /**
-     * Set a service instance directly.
-     *
-     * @param string $id
-     * @param mixed $service
-     * @return void
-     */
-    public function set( string $id, $service ): void {
-        $this->instances[$id] = $service;
-    }
-
-    /**
-     * Check if container has a service (either instance or class exists)
-     *
-     * @param string $id
-     * @return bool
-     */
-    public function has( string $id ): bool {
-        return isset( $this->instances[$id] ) || class_exists( $id );
-    }
-
-    /**
      * Create a new instance of the given class (Factory).
-     * Does not store the instance as a singleton.
      *
-     * @param string $abstract
-     * @param array $parameters
+     * @param  string  $abstract
+     * @param  array   $parameters
      * @return mixed
      * @throws ContainerException
      * @throws NotFoundException
-     * @throws \Exception
      */
     public function make( string $abstract, array $parameters = [] ) {
-        return $this->resolve( $abstract, $parameters );
+        $abstract = $this->registry->resolve_id( $abstract );
+        $concrete = $this->registry->get_concrete( $abstract );
+
+        return $this->build( $concrete, $parameters, $abstract );
+    }
+
+    /**
+     * Build the concrete instance.
+     *
+     * @param  mixed    $concrete
+     * @param  array    $params
+     * @param  ?string  $id
+     * @return mixed
+     * @throws ContainerException  If the target is not instantiable.
+     * @throws NotFoundException   If class or alias not found.
+     */
+    protected function build( $concrete, array $params = [], ?string $id = null ) {
+        // Resolve Closure closures
+        if ( $concrete instanceof Closure ) {
+            return $concrete( $this, $params );
+        }
+
+        if ( is_string( $concrete ) ) {
+            // Try to autowire the class
+            if ( class_exists( $concrete ) ) {
+                return $this->engine->resolve( $concrete, $params );
+            }
+             
+            // Return raw string if it's an alias pointing to something else
+            if ( $id !== null && $concrete !== $id ) {
+                return $concrete;
+            }
+
+             throw new NotFoundException( "Class or alias not found: {$concrete}" );
+        }
+
+        // Return provided objects
+        if ( is_object( $concrete ) ) {
+            return $concrete;
+        }
+
+        // Handle array callbacks
+        if ( is_array( $concrete ) && is_callable( $concrete ) ) {
+            return $this->call( $concrete, $params );
+        }
+
+        // Return scalars/arrays
+        if ( is_scalar( $concrete ) || is_array( $concrete ) ) {
+            return $concrete;
+        }
+
+        throw new ContainerException( "Target is not instantiable or callable: " . gettype( $concrete ) );
     }
 
     /**
      * Call a callback with dependency injection.
      *
-     * @param callable|array|string $callback
-     * @param array $parameters
+     * @param  callable|array|string  $callback
+     * @param  array                  $parameters
      * @return mixed
      * @throws \ReflectionException
+     * @throws ContainerException
      */
     public function call( $callback, array $parameters = [] ) {
-        if ( is_array( $callback ) ) {
-            $class  = is_object( $callback[0] ) ? get_class( $callback[0] ) : $callback[0];
-            $method = $callback[1];
-            $ref    = new \ReflectionMethod( $class, $method );
-
-            if ( is_string( $callback[0] ) && ! $ref->isStatic() ) {
-                $callback[0] = $this->get( $callback[0] );
-            }
-        } elseif ( is_string( $callback ) && strpos( $callback, '::' ) !== false ) {
-            $parts = explode( '::', $callback );
-            $ref   = new \ReflectionMethod( $parts[0], $parts[1] );
-
-            if ( ! $ref->isStatic() ) {
-                $instance = $this->get( $parts[0] );
-                $callback = [$instance, $parts[1]];
-            }
-        } elseif ( is_object( $callback ) && ! ( $callback instanceof \Closure ) ) {
-            $ref = new \ReflectionMethod( $callback, '__invoke' );
-        } else {
-            $ref = new \ReflectionFunction( $callback );
-        }
-
-        $args = $this->resolve_dependencies( $ref, $parameters );
-
-        return call_user_func_array( $callback, $args );
+        return $this->invoker->call( $callback, $parameters );
     }
 
     /**
-     * Resolve dependencies for a reflection function/method.
-     * 
-     * @param \ReflectionFunctionAbstract $ref
-     * @param array $parameters
-     * @return array
+     * Set a shared instance (singleton) directly into the container.
+     *
+     * @param  string  $id
+     * @param  mixed   $instance
+     * @return $this
      */
-    protected function resolve_dependencies( \ReflectionFunctionAbstract $ref, array $parameters = [] ): array {
-        $args = [];
-        foreach ( $ref->getParameters() as $param ) {
-            $name = $param->getName();
+    public function set( string $id, $instance ): self {
+        $resolved_id = $this->registry->resolve_id( $id );
+        $concrete    = $this->registry->get_concrete( $id );
 
-            if ( array_key_exists( $name, $parameters ) ) {
-                $args[] = $parameters[$name];
-                continue;
-            }
+        $this->instances[$id] = $instance;
 
-            $type = $param->getType();
-            if ( $type instanceof ReflectionNamedType && ! $type->isBuiltin() ) {
-                $id = $type->getName();
-
-                // Avoid infinite recursion / simple circular dependency check could be added here
-                // For now, we trust get() to handle it (standard recursion)
-                $args[] = $this->get( $id );
-                continue;
-            }
-
-            if ( $param->isDefaultValueAvailable() ) {
-                $args[] = $param->getDefaultValue();
-                continue;
-            }
-
-            // If we cannot resolve it, pass null or throw?
-            // PHP will throw ArgumentCountError if we don't pass anything for a required param.
-            // We'll let that happen as it's the most correct behavior for missing dependencies.
+        if ( is_string( $concrete ) && $concrete !== $id ) {
+            $this->instances[$concrete] = $instance;
         }
-        return $args;
+
+        if ( $resolved_id !== $id && $resolved_id !== $concrete ) {
+            $this->instances[$resolved_id] = $instance;
+        }
+
+        return $this;
+    }
+
+    /**
+     * Check if the container has a service or class registered.
+     *
+     * @param  string  $id
+     * @return bool
+     */
+    public function has( string $id ): bool {
+        // Fast paths: Already instantiated or registered in the registry
+        if ( isset( $this->instances[$id] ) || $this->registry->has( $id ) ) {
+            return true;
+        }
+
+        // Slow path: Resolve alias and check again, then check class_exists
+        $id = $this->registry->resolve_id( $id );
+        return isset( $this->instances[$id] ) || $this->registry->has( $id ) || class_exists( $id );
+    }
+
+    /**
+     * Get the terminal resolved ID for a given identifier.
+     *
+     * @param  string  $id
+     * @return string
+     */
+    public function resolved_id( string $id ): string {
+        return $this->registry->resolve_id( $id );
+    }
+
+    /**
+     * Clear all cached singleton instances.
+     *
+     * @return void
+     */
+    public function forget_instances(): void {
+        $this->instances = [];
+    }
+
+    /**
+     * Reset the entire container to its initial state.
+     *
+     * @return void
+     */
+    public function flush(): void {
+        $this->instances = [];
+        $this->registry->flush();
     }
 }
