@@ -142,9 +142,11 @@ class Container implements ContainerInterface
     /**
      * Get a service from the container.
      *
-     * @param  string  $id
-     * @param  array   $params
-     * @return mixed
+     * @template T
+     * @param  class-string<T>|string  $id      Service ID or class name to resolve.
+     * @param  array                   $params  Parameters for resolution.
+     * @return T
+     *
      * @throws NotFoundException            If the service cannot be resolved.
      * @throws CircularDependencyException  If a circularity is detected.
      * @throws ContainerException           If instantiation fails.
@@ -216,9 +218,11 @@ class Container implements ContainerInterface
     /**
      * Create a new instance of the given class (Factory).
      *
-     * @param  string  $abstract
-     * @param  array   $parameters
-     * @return mixed
+     * @template T
+     * @param  class-string<T>|string  $abstract    The class name or abstract to build.
+     * @param  array                   $parameters  Parameters for resolution.
+     * @return T
+     *
      * @throws ContainerException
      * @throws NotFoundException
      */
