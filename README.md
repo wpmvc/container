@@ -18,11 +18,13 @@ composer require wpmvc/container
 
 - **Zero Configuration**: Automatically resolves dependencies using PHP Reflection.
 - **Singleton by Default**: Maintains single instances of services unless bound otherwise.
+- **Contextual Bindings**: Inject different implementations of the same dependency based on the requesting context.
 - **Flexible Bindings**: Explicitly register transient, shared, or existing instances.
 - **Aliasing & Tagging**: Group and reference services using flexible identifiers.
 - **Advanced Autowiring**: Supports positional/variadic parameters, nullable types, and default values.
 - **Method Injection**: Supports DI for method calls via `call()`, including static methods and invokables.
-- **Circular Dependency Detection**: Prevents infinite loops with clear exception reporting.
+- **Circular Dependency Detection**: Robust detection using terminal resolved IDs.
+- **Performance Optimized**: Flat-mapped resolution reduces registry traversal overhead.
 - **Fluent Interface**: Supports method chaining for configuration.
 - **PSR-11 Compatible**: Implements `Psr\Container\ContainerInterface`.
 
@@ -51,6 +53,23 @@ Ensures only one instance exists within the container.
 ```php
 $container->singleton(MyLogger::class, MyLogger::class);
 ```
+
+#### Contextual Bindings
+Define different implementations based on which class is requesting the dependency.
+
+```php
+$container->when(PhotoController::class)
+          ->needs(Filesystem::class)
+          ->give(S3Filesystem::class);
+
+$container->when(ProfileController::class)
+          ->needs(Filesystem::class)
+          ->give(LocalFilesystem::class);
+```
+
+> [!TIP]
+> If you are using the full **WpMVC Framework**, you can use the fluent proxy directly from the `App` class:
+> `App::instance()->when(MyClass::class)->needs(...)->give(...);`
 
 #### Closure Bindings
 Use a closure for complex instantiation logic. The container is passed as the first argument.
@@ -97,10 +116,10 @@ $service = $container->get(MyService::class);
 ```
 
 > [!NOTE]
-> **Tri-cache Behavior**: For shared services, the container caches the instance under the requested ID, the terminal resolved ID, and the concrete class name. This ensures consistent resolution regardless of how the service is accessed.
+> **Singleton Integrity**: For shared services, the container synchronizes instances across the terminal resolved ID (concrete) and all aliases. This ensures that resolving an interface or its concrete implementation always returns the exact same object.
 
 > [!IMPORTANT]
-> Passing parameters to `get()` for an already-instantiated shared service will throw a `ContainerException`. Use `make()` if you need a fresh instance with custom parameters.
+> Passing parameters to `get()` for an already-instantiated shared service will return the existing instance and ignore the new parameters to maintain singleton integrity. Use `make()` if you need a fresh instance with custom parameters.
 
 ### Creating New Instances (Factory)
 
@@ -112,10 +131,10 @@ $freshInstance = $container->make(MyService::class, ['param' => 'value']);
 
 ### Checking Availability (`has`)
 
-Check if a service is available. The `has()` method follows a "Slow Path" logic:
-1. Check if already instantiated.
-2. Check if manually registered in the registry.
-3. Check if the terminal resolved ID exists as a class (`class_exists`).
+Check if a service is available. The `has()` method follows a performance-optimized logic:
+1. Fast-path check for cached instances or explicit registry entries.
+2. Alias resolution to check terminal IDs.
+3. Fallback to `class_exists` for autowiring candidates.
 
 ```php
 if ($container->has(MyService::class)) {
@@ -164,10 +183,11 @@ When resolving constructor or method arguments, the container follows a strict *
 
 1.  **Named Parameters**: Explicit keys in the `$params` array matching the argument name.
 2.  **Type Hint (Auto-Substitution)**: If a provided parameter in `$params` is an object matching the required type hint, it is used immediately.
-3.  **Type Hint (Recursive)**: Resolves the type-hinted class/interface from the container.
-4.  **Variadic Parameters**: Collects all remaining arguments from the `$params` array.
-5.  **Positional Parameters**: Uses unkeyed arguments from `$params`. These are **type-guarded**; they are only used if they match the expected type hint.
-6.  **Default Values & Nullable Types**: Fallback to `$param = 'default'` or `null` (if allowed).
+3.  **Contextual Binding**: Checks if a specific rule exists for the class currently being resolved.
+4.  **Type Hint (Recursive)**: Resolves the type-hinted class/interface from the container.
+5.  **Variadic Parameters**: Collects all remaining arguments from the `$params` array.
+6.  **Positional Parameters**: Uses unkeyed arguments from `$params`. These are **type-guarded**; they are only used if they match the expected type hint.
+7.  **Default Values & Nullable Types**: Fallback to `$param = 'default'` or `null` (if allowed).
 
 ## Advanced Method Invocation (`call`)
 
