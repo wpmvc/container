@@ -6,3 +6,4 @@ package-lock.json
 composer.lock
 .phpunit.result.cache
 phpunit-report.xml
+phpcs-report.xml

@@ -28,6 +28,7 @@ class CircularDependencyTest extends TestCase
      */
     public function test_singleton_integrity_regardless_of_resolution_order() {
         $container = new Container();
+        $container->singleton( StubConcrete::class );
         $container->singleton( StubInterface::class, StubConcrete::class );
 
         // Resolve concrete FIRST

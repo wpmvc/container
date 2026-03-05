@@ -55,9 +55,21 @@ class ContainerTest extends TestCase
     }
 
     /**
+     * Verifies that the container returns a fresh instance by default for unregistered classes.
+     */
+    public function test_it_returns_fresh_instance_by_default() {
+        $instance1 = $this->container->get( ConcreteClass::class );
+        $instance2 = $this->container->get( ConcreteClass::class );
+
+        $this->assertNotSame( $instance1, $instance2 );
+    }
+
+    /**
      * Verifies that singletons return the same instance across multiple resolutions.
      */
     public function test_it_returns_same_instance_for_singleton() {
+        $this->container->singleton( ConcreteClass::class );
+        
         $instance1 = $this->container->get( ConcreteClass::class );
         $instance2 = $this->container->get( ConcreteClass::class );
 
@@ -136,6 +148,19 @@ class ContainerTest extends TestCase
 
         $this->assertEquals( 'custom value', $instance->value );
         $this->assertEquals( 42, $instance->number );
+    }
+
+    /**
+     * Verifies that passing parameters to an already instantiated shared service does not throw anymore.
+     */
+    public function test_it_ignores_parameters_for_existing_shared_service() {
+        $this->container->singleton( ClassWithParams::class );
+        
+        $instance1 = $this->container->get( ClassWithParams::class, ['value' => 'first', 'number' => 1] );
+        $instance2 = $this->container->get( ClassWithParams::class, ['value' => 'ignored', 'number' => 2] );
+
+        $this->assertSame( $instance1, $instance2 );
+        $this->assertEquals( 'first', $instance2->value );
     }
 
     /**
@@ -233,6 +258,10 @@ class ContainerTest extends TestCase
     /**
      * Verifies that middleware-style calls work correctly (injecting stdClass and closure).
      */
+
+    /**
+     * Verifies that the container correctly resolves middleware-like calls (injecting stdClass and closure).
+     */
     public function test_it_correctly_resolves_middleware_like_calls() {
         $req  = new \stdClass();
         $next = function() { return 'next'; };
@@ -245,5 +274,31 @@ class ContainerTest extends TestCase
 
         $this->assertSame( $req, $result[0] );
         $this->assertEquals( 'next', $result[1] );
+    }
+
+    /**
+     * Verifies that duplicate tags are ignored.
+     */
+    public function test_it_prevents_duplicate_tags() {
+        $this->container->tag( ConcreteClass::class, ['plugin', 'service'] );
+        $this->container->tag( ConcreteClass::class, ['plugin'] ); // Duplicate
+
+        $tagged = $this->container->tagged( 'plugin' );
+        $count  = 0;
+        foreach ( $tagged as $item ) {
+            $count++;
+        }
+
+        $this->assertEquals( 1, $count );
+    }
+
+    /**
+     * Verifies that calling an abstract method throws a ContainerException.
+     */
+    public function test_it_throws_exception_on_abstract_method_call() {
+        $this->expectException( ContainerException::class );
+        $this->expectExceptionMessage( 'Cannot call abstract method' );
+
+        $this->container->call( [\Psr\Container\ContainerInterface::class, 'get'] );
     }
 }

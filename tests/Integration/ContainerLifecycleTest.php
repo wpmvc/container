@@ -73,18 +73,19 @@ class ContainerLifecycleTest extends TestCase
     }
 
     /**
-     * Verifies that shared instances cannot be parameterized after instantiation.
+     * Verifies that shared instances can be parameterized (parameters are ignored if already instantiated).
      */
-    public function test_it_guards_shared_instance_parameterization() {
+    public function test_it_allows_shared_instance_parameterization() {
         $this->container->singleton( ClassWithParams::class );
         
         $instance = $this->container->get( ClassWithParams::class, ['value' => 'first-call'] );
         $this->assertEquals( 'first-call', $instance->value );
 
-        $this->expectException( ContainerException::class );
-        $this->expectExceptionMessage( 'Cannot pass parameters to an already instantiated shared service' );
+        // This should NO LONGER throw an exception
+        $instance2 = $this->container->get( ClassWithParams::class, ['value' => 'second-call'] );
         
-        $this->container->get( ClassWithParams::class, ['value' => 'second-call'] );
+        $this->assertSame( $instance, $instance2 );
+        $this->assertEquals( 'first-call', $instance2->value ); // Parameters were ignored
     }
 
     /**

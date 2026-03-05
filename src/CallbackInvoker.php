@@ -53,13 +53,16 @@ class CallbackInvoker
     }
 
     /**
-     * Call a callback with dependency injection.
+     * Invoke a callback with dependency injection.
+     * 
+     * Resolves the callback format, matches its parameters with the container/params,
+     * and executes the call.
      *
-     * @param  callable|array|string  $callback
-     * @param  array                  $parameters
-     * @return mixed
-     * @throws ReflectionException  If reflection fails.
-     * @throws ContainerException   If the callback is invalid.
+     * @param  callable|array|string  $callback    The callback to invoke (Function, Closure, [Class, Method], etc.).
+     * @param  array                  $parameters  Optional manual parameters to pass to the callback.
+     * @return mixed                               The result of the callback execution.
+     * @throws ReflectionException  If the callback cannot be introspected.
+     * @throws ContainerException   If the callback is invalid or unresolvable.
      */
     public function call( $callback, array $parameters = [] ) {
         [$resolved_callback, $metadata] = $this->resolve_callback( $callback );
@@ -103,25 +106,30 @@ class CallbackInvoker
     }
 
     /**
-     * Resolve an array-based callback.
+     * Resolve an array-based callback [Class/ID/Object, Method].
+     * 
+     * If a class name or service ID is provided, it tries to resolve an instance 
+     * from the container before reflecting on the method.
      *
-     * @param  array  $callback
-     * @return array  [callable, \ReflectionMethod]
+     * @param  array  $callback  The [target, method] array.
+     * @return array             [callable, \ReflectionMethod]
      * @throws ReflectionException  If reflection fails.
-     * @throws ContainerException   If the class or service ID is not found.
+     * @throws ContainerException   If the class, service ID, or method is invalid.
      */
     protected function resolve_array_callback( array $callback ) {
         [$class_or_id, $method] = $callback;
 
-        // Determine the class name for reflection
+        // 1. Determine the class name and instance for reflection.
         if ( is_object( $class_or_id ) ) {
             $class    = get_class( $class_or_id );
             $instance = $class_or_id;
         } else {
+            // Resolve the terminal ID (in case it's an alias).
             $class    = $this->container->resolved_id( $class_or_id );
             $instance = null;
 
-            if ( ! class_exists( $class ) ) {
+            if ( ! class_exists( $class ) && ! interface_exists( $class ) ) {
+                // Check if the identifier is a bound service that can be instantiated.
                 if ( $this->container->has( $class_or_id ) ) {
                     $instance = $this->container->get( $class_or_id );
                     $class    = get_class( $instance );
@@ -133,7 +141,7 @@ class CallbackInvoker
 
         $ref = $this->get_method_reflection( $class, $method );
 
-        // If not static and we don't have an instance, resolve one from the container
+        // 2. If the method is non-static and we don't have an instance yet, resolve one.
         if ( ! $ref->isStatic() && ! $instance ) {
             $instance = $this->container->get( $class );
         }
@@ -162,6 +170,10 @@ class CallbackInvoker
         
         if ( ! $ref->isPublic() ) {
             throw new ContainerException( "Method {$class_name}::{$method} is not public." );
+        }
+
+        if ( $ref->isAbstract() ) {
+            throw new ContainerException( "Cannot call abstract method {$class_name}::{$method}." );
         }
 
         $this->engine->cache_method( $cache_key, $ref );

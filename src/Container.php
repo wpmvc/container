@@ -20,16 +20,21 @@ use WpMVC\Container\Exception\CircularDependencyException;
 /**
  * Class Container
  *
- * Enterprise-Ready Dependency Injection Container for WordPress.
+ * An Enterprise-Ready Dependency Injection Container for WordPress.
+ * 
+ * Provides a robust implementation of the PSR-11 ContainerInterface, 
+ * featuring reflection-based autowiring, singleton management, 
+ * alias resolution, and contextual bindings.
  *
  * @package WpMVC\Container
  *
- * @method $this bind(string $abstract, mixed|null $concrete = null)
- * @method $this singleton(string $abstract, mixed|null $concrete = null)
- * @method $this alias(string $abstract, string $alias)
- * @method mixed get(string $id, array $params = [])
- * @method mixed make(string $abstract, array $parameters = [])
- * @method mixed call(callable|array|string $callback, array $parameters = [])
+ * @method $this bind(string $abstract, mixed|null $concrete = null) Register a transient binding.
+ * @method $this singleton(string $abstract, mixed|null $concrete = null) Register a shared binding.
+ * @method $this alias(string $abstract, string $alias) Alias a type to another name.
+ * @method mixed get(string $id, array $params = []) Resolve a service instance from the container.
+ * @method mixed make(string $abstract, array $parameters = []) Create a fresh instance of a class (Factory).
+ * @method mixed call(callable|array|string $callback, array $parameters = []) Invoke a callable with dependency injection.
+ * @method ContextualBindingBuilder when(string $concrete) Define a contextual binding for a specific class.
  */
 class Container implements ContainerInterface
 {
@@ -126,10 +131,10 @@ class Container implements ContainerInterface
     }
 
     /**
-     * Resolve all bindings for a given tag.
+     * Resolve all services associated with a given tag.
      *
-     * @param  string  $tag
-     * @return iterable
+     * @param  string  $tag  The tag identifier.
+     * @return iterable      A collection of resolved service instances.
      */
     public function tagged( string $tag ): iterable {
         return array_map(
@@ -137,6 +142,43 @@ class Container implements ContainerInterface
                 return $this->get( $abstract );
             }, $this->registry->get_tag( $tag )
         );
+    }
+
+    /**
+     * Define a contextual binding for a specific class.
+     * 
+     * Initiates the fluent API for context-sensitive dependency injection.
+     *
+     * @param  string  $concrete  The class name that requires the contextual binding.
+     * @return ContextualBindingBuilder
+     */
+    public function when( string $concrete ): ContextualBindingBuilder {
+        return new ContextualBindingBuilder( $this, $concrete );
+    }
+
+    /**
+     * Add a contextual binding for a given class.
+     *
+     * @internal
+     * @param  string  $concrete
+     * @param  string  $abstract
+     * @param  mixed   $implementation
+     * @return void
+     */
+    public function add_contextual_binding( string $concrete, string $abstract, $implementation ): void {
+        $this->registry->add_contextual_binding( $concrete, $abstract, $implementation );
+    }
+
+    /**
+     * Get the contextual binding for a given class.
+     *
+     * @internal
+     * @param  string  $concrete
+     * @param  string  $abstract
+     * @return mixed|null
+     */
+    public function get_contextual_binding( string $concrete, string $abstract ) {
+        return $this->registry->get_contextual_binding( $concrete, $abstract );
     }
 
     /**
@@ -152,66 +194,47 @@ class Container implements ContainerInterface
      * @throws ContainerException           If instantiation fails.
      */
     public function get( string $id, array $params = [] ) {
-        // 1. If it's already in instance cache, return it
-        if ( isset( $this->instances[$id] ) ) {
-            if ( ! empty( $params ) ) {
-                throw new ContainerException( "Cannot pass parameters to an already instantiated shared service: {$id}" );
-            }
-            return $this->instances[$id];
+        // 1. Resolve terminal ID immediately to ensure alias consistency.
+        $resolved_id = $this->registry->resolve_id( $id );
+
+        // 2. Direct cache hit (check if the service is already instantiated).
+        if ( isset( $this->instances[$resolved_id] ) ) {
+            return $this->instances[$resolved_id];
         }
 
-        // 2. Circular dependency detection
-        if ( isset( $this->resolving[$id] ) ) {
-            throw new CircularDependencyException( "Circular dependency detected while resolving: {$id}" );
+        $concrete  = $this->registry->get_concrete_internal( $resolved_id );
+        $is_shared = $this->registry->is_shared_internal( $resolved_id );
+
+        // 3. Cross-resolution cache hit (e.g., interface resolved to already cached concrete singleton).
+        if ( $is_shared && is_string( $concrete ) && isset( $this->instances[$concrete] ) ) {
+            return $this->instances[$resolved_id] = $this->instances[$concrete];
         }
 
-        $this->resolving[$id] = true;
+        // 4. Circular dependency detection using the terminal resolved ID.
+        if ( isset( $this->resolving[$resolved_id] ) ) {
+            throw new CircularDependencyException( "Circular dependency detected while resolving: {$id} (resolved to {$resolved_id})" );
+        }
+
+        $this->resolving[$resolved_id] = true;
 
         try {
-            // 3. Determine terminal ID and concrete
-            $resolved_id = $this->registry->resolve_id( $id );
-            $concrete    = $this->registry->get_concrete( $id );
-            
-            // If the key is not in registry, try to autowire it as a class
-            $is_shared = $this->registry->has( $id ) ? $this->registry->is_shared( $id ) : true;
-
-            // 4. Check if the resolved ID or concrete is already instantiated
-            $cached_key = null;
-            if ( isset( $this->instances[$resolved_id] ) ) {
-                $cached_key = $resolved_id;
-            } elseif ( is_string( $concrete ) && isset( $this->instances[$concrete] ) ) {
-                $cached_key = $concrete;
-            }
-
-            if ( $is_shared && $cached_key !== null ) {
-                if ( ! empty( $params ) ) {
-                    throw new ContainerException( "Cannot pass parameters to an already instantiated shared service: {$cached_key}" );
-                }
-                $this->instances[$id] = $this->instances[$cached_key];
-                return $this->instances[$id];
-            }
-
-            // 5. Build the instance
+            // 5. Build the instance via the resolution engine.
             $instance = $this->build( $concrete, $params, $id );
 
-            // 6. Cache if shared
+            // 6. Cache the instance if the binding is shared (singleton).
             if ( $is_shared ) {
-                $this->instances[$id] = $instance;
+                $this->instances[$resolved_id] = $instance;
                 
-                // Map the instance to the concrete class name too
-                if ( is_string( $concrete ) && $concrete !== $id ) {
-                    $this->instances[$concrete] = $instance;
-                }
-                
-                // Map it to the terminal resolved ID too
-                if ( $resolved_id !== $id && $resolved_id !== $concrete ) {
-                    $this->instances[$resolved_id] = $instance;
+                // If it was an interface resolution, alias the interface to the instance too.
+                if ( $id !== $resolved_id ) {
+                    $this->instances[$id] = $instance;
                 }
             }
 
             return $instance;
         } finally {
-            unset( $this->resolving[$id] );
+            // Unset resolution flag to avoid false positives in subsequent calls.
+            unset( $this->resolving[$resolved_id] );
         }
     }
 

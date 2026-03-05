@@ -40,14 +40,21 @@ class ResolutionEngine
      * @var array
      */
     protected $reflection_cache = [
-        'constructors' => [],
-        'methods'      => [],
+        'classes' => [],
+        'methods' => [],
     ];
+
+    /**
+     * Stack of classes currently being built.
+     *
+     * @var array
+     */
+    protected $build_stack = [];
 
     /**
      * ResolutionEngine constructor.
      *
-     * @param ContainerInterface $container
+     * @param ContainerInterface $container  The container instance used for recursive resolution.
      */
     public function __construct( ContainerInterface $container ) {
         $this->container = $container;
@@ -63,25 +70,36 @@ class ResolutionEngine
      * @throws ContainerException  If the class is not instantiable.
      */
     public function resolve( string $id, array $params = [] ) {
-        if ( ! isset( $this->reflection_cache['constructors'][$id] ) ) {
+        // 1. Fetch from reflection cache if available, otherwise introspect the class.
+        if ( ! isset( $this->reflection_cache['classes'][$id] ) ) {
             $ref = new ReflectionClass( $id );
             
             if ( ! $ref->isInstantiable() ) {
                 throw new ContainerException( "Class is not instantiable: {$id}" );
             }
 
-            $this->reflection_cache['constructors'][$id] = $ref;
+            $this->reflection_cache['classes'][$id] = $ref;
         }
-
-        $ref         = $this->reflection_cache['constructors'][$id];
-        $constructor = $ref->getConstructor();
-        $args        = [];
         
-        if ( $constructor ) {
-            $args = $this->resolve_dependencies( $constructor->getParameters(), $params );
-        }
+        $ref = $this->reflection_cache['classes'][$id];
 
-        return $ref->newInstanceArgs( $args );
+        // 2. Track the class being built to allow for contextual dependency resolution.
+        $this->build_stack[] = $id;
+
+        try {
+            $constructor = $ref->getConstructor();
+            $args        = [];
+            
+            if ( $constructor ) {
+                // 3. Resolve all dependencies required by the constructor.
+                $args = $this->resolve_dependencies( $constructor->getParameters(), $params );
+            }
+
+            return $ref->newInstanceArgs( $args );
+        } finally {
+            // 4. Pop the build stack to maintain accurate context for subsequent resolutions.
+            array_pop( $this->build_stack );
+        }
     }
 
     /**
@@ -105,14 +123,24 @@ class ResolutionEngine
                 continue;
             }
 
-            // 2. Try to resolve by type hint
+            // 2. Try to resolve by type hint (Interface or Class).
             $type = $param->getType();
             if ( $type instanceof ReflectionNamedType && ! $type->isBuiltin() ) {
                 $id = $type->getName();
 
-                // Optimization: Check if any provided parameter matches this type
+                // 2a. Check for contextual binding first.
+                // If the class currently being built has a specific rule for this dependency, use it.
+                $concrete = end( $this->build_stack );
+                if ( $concrete && ( $contextual = $this->container->get_contextual_binding( $concrete, $id ) ) ) {
+                    $args[] = $contextual instanceof \Closure 
+                        ? $contextual( $this->container, $parameters ) 
+                        : $this->container->get( $contextual, $parameters );
+                    continue;
+                }
+
+                // 2b. Optimization: Check if any provided parameter object matches this type hint.
                 foreach ( $parameters as $key => $provided_param ) {
-                    if ( is_object( $provided_param ) && ( $provided_param instanceof $id || ltrim( get_class( $provided_param ), '\\' ) === ltrim( $id, '\\' ) ) ) {
+                    if ( is_object( $provided_param ) && $provided_param instanceof $id ) {
                         $args[] = $provided_param;
                         unset( $parameters[$key] );
                         continue 2;
@@ -124,11 +152,9 @@ class ResolutionEngine
                     $args[] = $this->container->get( $id, $parameters );
                     continue;
                 } catch ( NotFoundException $e ) {
-                    // Fall through to other resolution strategies
+                    // Fall through to other resolution strategies (default values, nullables)
                 } catch ( CircularDependencyException $e ) {
                     throw $e;
-                } catch ( ContainerException $e ) {
-                    // Fall through to other resolution strategies
                 }
             }
 
@@ -217,7 +243,7 @@ class ResolutionEngine
             case 'mixed':    return true;
         }
 
-        return ! is_object( $value );
+        return false;
     }
 
     /**

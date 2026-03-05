@@ -44,10 +44,19 @@ class Registry
     protected $tags = [];
 
     /**
-     * Register a transient binding.
+     * The contextual bindings.
      *
-     * @param  string      $abstract
-     * @param  mixed|null  $concrete
+     * @var array
+     */
+    protected $contextual = [];
+
+    /**
+     * Register a transient (non-shared) binding.
+     * 
+     * Transient services are re-instantiated every time they are resolved.
+     *
+     * @param  string      $abstract  The abstract identifier (interface or class name).
+     * @param  mixed|null  $concrete  The concrete implementation (closure or class name).
      * @return void
      */
     public function bind( string $abstract, $concrete = null ): void {
@@ -99,7 +108,9 @@ class Registry
             }
 
             foreach ( $abstracts as $abstract ) {
-                $this->tags[$tag][] = $abstract;
+                if ( ! in_array( $abstract, $this->tags[$tag], true ) ) {
+                    $this->tags[$tag][] = $abstract;
+                }
             }
         }
     }
@@ -116,9 +127,12 @@ class Registry
 
     /**
      * Resolve the terminal identifier by following all aliases.
+     * 
+     * This method recursively follows aliases until it finds the root identifier.
+     * It includes basic circular alias detection.
      *
-     * @param  string  $id
-     * @return string
+     * @param  string  $id  The identifier or alias to resolve.
+     * @return string       The terminal (root) identifier.
      * @throws ContainerException  If a circular alias resolution is detected.
      */
     public function resolve_id( string $id ): string {
@@ -139,9 +153,12 @@ class Registry
     /**
      * Get the concrete implementation mapped to an abstract identifier.
      *
-     * @param  string  $abstract
-     * @param  array   $history
-     * @return mixed
+     * Performs a full resolution including alias traversal and recursion 
+     * for chained bindings.
+     *
+     * @param  string  $abstract  The abstract identifier to resolve.
+     * @param  array   $history   Resolution history (used for circular detection).
+     * @return mixed              The concrete implementation (target class or closure).
      * @throws ContainerException  If a circular resolution path is detected.
      */
     public function get_concrete( string $abstract, array $history = [] ) {
@@ -153,6 +170,19 @@ class Registry
 
         $id = $this->resolve_id( $abstract );
 
+        return $this->get_concrete_internal( $id, $history );
+    }
+
+    /**
+     * Internal method to get concrete implementation without re-resolving ID.
+     * 
+     * @internal This method assumes the ID has already been resolved via resolve_id().
+     * 
+     * @param  string  $id       The already resolved terminal ID.
+     * @param  array   $history  Resolution history.
+     * @return mixed
+     */
+    public function get_concrete_internal( string $id, array $history = [] ) {
         if ( isset( $this->bindings[$id] ) ) {
             $concrete = $this->bindings[$id]['concrete'];
             
@@ -175,7 +205,39 @@ class Registry
      */
     public function is_shared( string $abstract ): bool {
         $id = $this->resolve_id( $abstract );
+        return $this->is_shared_internal( $id );
+    }
+
+    /**
+     * Internal method to check shared status without re-resolving ID.
+     * 
+     * @internal
+     */
+    public function is_shared_internal( string $id ): bool {
         return $this->bindings[$id]['shared'] ?? false;
+    }
+
+    /**
+     * Add a contextual binding to the registry.
+     *
+     * @param  string  $concrete
+     * @param  string  $abstract
+     * @param  mixed   $implementation
+     * @return void
+     */
+    public function add_contextual_binding( string $concrete, string $abstract, $implementation ): void {
+        $this->contextual[$concrete][$abstract] = $implementation;
+    }
+
+    /**
+     * Get the contextual binding for a given concrete and abstract.
+     *
+     * @param  string  $concrete
+     * @param  string  $abstract
+     * @return mixed|null
+     */
+    public function get_contextual_binding( string $concrete, string $abstract ) {
+        return $this->contextual[$concrete][$abstract] ?? null;
     }
 
     /**
@@ -194,8 +256,9 @@ class Registry
      * @return void
      */
     public function flush(): void {
-        $this->bindings = [];
-        $this->aliases  = [];
-        $this->tags     = [];
+        $this->bindings   = [];
+        $this->aliases    = [];
+        $this->tags       = [];
+        $this->contextual = [];
     }
 }
