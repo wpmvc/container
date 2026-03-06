@@ -185,7 +185,7 @@ class Container implements ContainerInterface
      * Get a service from the container.
      *
      * @template T
-     * @param  class-string<T>|string  $id      Service ID or class name to resolve.
+     * @param  class-string<T>  $id      Service ID or class name to resolve.
      * @param  array                   $params  Parameters for resolution.
      * @return T
      *
@@ -242,7 +242,7 @@ class Container implements ContainerInterface
      * Create a new instance of the given class (Factory).
      *
      * @template T
-     * @param  class-string<T>|string  $abstract    The class name or abstract to build.
+     * @param  class-string<T>  $abstract    The class name or abstract to build.
      * @param  array                   $parameters  Parameters for resolution.
      * @return T
      *
